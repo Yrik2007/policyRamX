@@ -1,13 +1,15 @@
 import time
 import telebot
 import feedparser
-import requests
-from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from threading import Timer
+import json
+import os
+import requests  # Добавлен импорт requests
+from bs4 import BeautifulSoup  # Добавлен импорт BeautifulSoup
 
 # Ваш API ключ для Telegram
-TELEGRAM_BOT_TOKEN = '6718164861:AAESCqR3hEwKj5PITne8x5mY1xKDE-aVhZc'
+TELEGRAM_BOT_TOKEN = '7467973815:AAFxhDBb6kUs-vOeM3zm3uabjxCWSd1x6KE'
 
 # Инициализация Telegram бота
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
@@ -15,66 +17,61 @@ bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 # URL RSS-ленты
 RSS_FEED_URL = 'https://news.mail.ru/rss/politics/'
 
-# Временная метка последней отправленной новости
-last_sent_time = datetime.utcnow() - timedelta(hours=12)
+# Путь к файлу для сохранения последней отправленной новости
+LAST_SENT_FILE = 'last_sent.json'
 
 # Очередь для хранения новых новостей
 news_queue = []
 
 
-def get_html_content(url):
-    """Получение HTML контента по URL"""
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        return response.text
-    except Exception as e:
-        print(f"Error fetching the URL {url}: {e}")
-        return None
+def save_last_sent_time(last_sent_time):
+    """Сохранение временной метки последней отправленной новости в файл"""
+    with open(LAST_SENT_FILE, 'w') as file:
+        json.dump({'last_sent_time': last_sent_time.isoformat()}, file)
 
 
-def extract_image_url(html_content, class_name):
-    """Извлечение URL изображения из HTML контента"""
-    soup = BeautifulSoup(html_content, 'html.parser')
-    img = soup.find('img', class_=class_name)
-    return img['src'] if img else None
+def load_last_sent_time():
+    """Загрузка временной метки последней отправленной новости из файла"""
+    if os.path.exists(LAST_SENT_FILE):
+        with open(LAST_SENT_FILE, 'r') as file:
+            data = json.load(file)
+            return datetime.fromisoformat(data['last_sent_time'])
+    else:
+        return datetime.utcnow() - timedelta(hours=12)
 
 
-def extract_div_text(html_content, class_names):
-    """Извлечение текста из последнего <div> с заданными классами"""
-    soup = BeautifulSoup(html_content, 'html.parser')
-    divs = soup.find_all('div', class_=class_names)
-    if divs:
-        last_div = divs[-1]
-        p = last_div.find('p')
-        return p.get_text() if p else ""
-    return ""
+# Инициализация временной метки последней отправленной новости
+last_sent_time = load_last_sent_time()
 
 
 def get_latest_news():
     """Получение последних новостей из RSS-ленты"""
     feed = feedparser.parse(RSS_FEED_URL)
-    print(feed)
     articles = []
-
-    now = datetime.utcnow()
-    for entries in feed.entries:
-        published_time = datetime(*entries.published_parsed[:6])
+    for entry in reversed(feed.entries[:10]):  # Получаем только последние 10 новостей
+        published_time = datetime(*entry.published_parsed[:6])
         if published_time > last_sent_time:
-            url = entries.link
-            html_content = get_html_content(url)
-            if html_content:
-                image_url = extract_image_url(html_content, 'af30e1399f')
-                div_text = extract_div_text(html_content, ['d4d7f9cef4', 'df068f8f97'])
-                articles.append({
-                    'title': entries.title,
-                    'link': entries.link,
-                    'image_url': image_url,
-                    'div_text': div_text,
-                    'description': entries.summary
-                })
-
+            articles.append({
+                'title': entry.title,
+                'description': getattr(entry, 'summary', 'Нет описания'),
+                'published_time': published_time,
+                'link': entry.link
+            })
     return articles
+
+
+def fetch_image_url(article_url):
+    """Получение URL изображения со страницы новости"""
+    try:
+        response = requests.get(article_url)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.content, 'html.parser')
+            img_tag = soup.find('img', class_='af30e1399f lazy')
+            if img_tag and img_tag.has_attr('src'):
+                return img_tag['src']
+    except Exception as e:
+        print(f"Error fetching image URL: {e}")
+    return None
 
 
 def check_for_new_articles():
@@ -83,37 +80,41 @@ def check_for_new_articles():
     articles = get_latest_news()
     if articles:
         news_queue.extend(articles)
-        last_sent_time = datetime.utcnow()
+        last_sent_time = max(article['published_time'] for article in articles)
+        save_last_sent_time(last_sent_time)
         print(f"Added {len(articles)} articles to the queue.")
 
-    Timer(10, check_for_new_articles).start()  # Проверка каждые 10 секунд
+    Timer(600, check_for_new_articles).start()  # Проверка каждые 10 минут
 
 
 def send_news_from_queue():
     """Отправка новостей из очереди"""
     if news_queue:
         article = news_queue.pop(0)
-        caption = f"{article['title']}\n\n{article['description']}\n\n{article['div_text']}"
+        caption = f"{article['title']}\n\n{article['description']}"
+
+        image_url = fetch_image_url(article['link'])
 
         try:
-            if article['image_url']:
+            if image_url:
                 bot.send_photo(
                     chat_id=-1002224464413,
-                    photo=article['image_url'],
+                    photo=image_url,
                     caption=caption,
                     parse_mode='Markdown'
                 )
+                print(f"Sent article with image: {article['title']}")
             else:
                 bot.send_message(
                     chat_id=-1002224464413,
                     text=caption,
                     parse_mode='Markdown'
                 )
-            print(f"Sent article: {article['title']}")
+                print(f"Sent article without image: {article['title']}")
         except Exception as e:
             print(f"Error sending message: {e}")
 
-        Timer(10, send_news_from_queue).start()  # Отправка каждые 10 секунд
+    Timer(10, send_news_from_queue).start()  # Отправка каждые 10 секунд
 
 
 def main():
