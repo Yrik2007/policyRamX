@@ -7,6 +7,7 @@ import json
 import os
 import requests  # Добавлен импорт requests
 from bs4 import BeautifulSoup  # Добавлен импорт BeautifulSoup
+import random  # Добавлен импорт random
 
 # Ваш API ключ для Telegram
 TELEGRAM_BOT_TOKEN = '7467973815:AAFxhDBb6kUs-vOeM3zm3uabjxCWSd1x6KE'
@@ -91,14 +92,14 @@ def send_news_from_queue():
     """Отправка новостей из очереди"""
     if news_queue:
         article = news_queue.pop(0)
-        caption = f"{article['title']}\n\n{article['description']}"
+        caption = f"{article['title']}\n\n{article['description']}\n\n[Новости Mail.ru](https://news.mail.ru)"
 
         image_url = fetch_image_url(article['link'])
 
         try:
             if image_url:
                 bot.send_photo(
-                    chat_id=-1002224464413,
+                    chat_id=-1002176581024,
                     photo=image_url,
                     caption=caption,
                     parse_mode='Markdown'
@@ -106,7 +107,7 @@ def send_news_from_queue():
                 print(f"Sent article with image: {article['title']}")
             else:
                 bot.send_message(
-                    chat_id=-1002224464413,
+                    chat_id=-1002176581024,
                     text=caption,
                     parse_mode='Markdown'
                 )
@@ -114,7 +115,8 @@ def send_news_from_queue():
         except Exception as e:
             print(f"Error sending message: {e}")
 
-    Timer(10, send_news_from_queue).start()  # Отправка каждые 10 секунд
+    random_interval = random.randint(120, 420)  # Случайный интервал от 2 до 7 минут (в секундах)
+    Timer(random_interval, send_news_from_queue).start()  # Отправка через случайный интервал
 
 
 def main():
